@@ -15,13 +15,13 @@ python3 check_brew_apps.py
 
 
 ## Notes
-* Does not support Windows
+* Only supports MacOS and Linux
 
 *  Always double-check outputted brew casks if they actually match the original app (script may get confused with generic names)
 
 * Some results may not appear if they are only available as a different release (e.g osu@tachyon)
 
-* Scans only the system applications folder on MacOS
+* Scans only the system applications folder for MacOS
 
 * Recommended to have Homebrew installed and requires Python
 
