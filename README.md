@@ -4,7 +4,7 @@ Simple python script that checks your applications folder for any apps that can 
 ## Installation
 Clone the repository and run:
 ```bash
-git clone https://github.com/min-minimum/check_brew_apps.py.git
+git clone https://github.com/min-minimum/check_brew_apps.py.git check_brew_apps
 cd check_brew_apps
 python3 check_brew_apps.py
 ```
