@@ -1,74 +1,148 @@
-from pathlib import Path
-from os import environ
+#!/usr/bin/env python3
+import os
+import json
 import urllib.request
 import platform
-import json
+import re
+import subprocess
 
-def applications_folder() -> Path:
-    print("[*]: Finding applications folder...")
-    current_os: str = platform.system()
-    if current_os == "Darwin":
-        return Path("/Applications")
-    elif current_os == "Linux":
-        xdg_data_home: str | None = environ.get("XDG_DATA_HOME")
-        if xdg_data_home:
-            linux_path: Path = Path(xdg_data_home) / "applications"
-        else:
-            linux_path = Path.home() / ".local" / "share" / "applications"       
-        return linux_path
-    else:
-        raise OSError(f"[X]: \033[31mUnsupported operating system: {current_os}\033[0m") 
-
-def get_brew_list() -> list:
-    print("[*]: Fetching Homebrew Cask database... (this may take a few seconds)")
-    url = "https://formulae.brew.sh/api/cask.json"
+def get_installed_casks():
     try:
-        with urllib.request.urlopen(url, timeout=10) as response:
-            return json.loads(s=response.read().decode())
-    except Exception as e:
-        raise RuntimeError(f"[X]: Failed to fetch Homebrew data: \033[31m{e}\033[0m")
+        result = subprocess.run(
+            ['brew', 'list', '--cask'], 
+            capture_output=True, 
+            text=True, 
+            check=True
+        )
+        casks = set(line.strip() for line in result.stdout.strip().split('\n') if line.strip())
+        return casks
+    except (subprocess.CalledProcessError, FileNotFoundError):
+        print("Note: Could not check installed casks (is Homebrew in your PATH?). Assuming none.")
+        return set()
 
-def main() -> None:
-    print("(check_brew_apps): Initialised")
-    directory_path: Path = applications_folder()
-    local_apps: dict[str, str] = {}
-    for app in directory_path.glob(pattern="*.app"):
-        local_apps[app.stem.lower()] = app.stem
-        
-    brew_database: list[dict] = get_brew_list()
-    brew_lookup: dict[str, str] = {}
-
-    for cask in brew_database:
-        token = cask.get("token", "")
-        if not token:
-            continue
+def fetch_brew_casks():
+    url = "https://formulae.brew.sh/api/cask.json"
+    req = urllib.request.Request(url, headers={'User-Agent': 'Mozilla/5.0'})
+    try:
+        with urllib.request.urlopen(req) as response:
+            data = json.loads(response.read().decode('utf-8'))
             
-        token_lower = token.lower()
+        cask_mapping = {}
+        for cask in data:
+            token = cask.get('token')
+            names = cask.get('name', [])
+            
+            cask_mapping[token.lower()] = token
+            for name in names:
+                cask_mapping[name.lower()] = token
+                norm_name = re.sub(r'[\s\-]', '', name.lower())
+                cask_mapping[norm_name] = token
+                
+        return cask_mapping
+    except Exception as e:
+        print(f"Error fetching cask data: {e}")
+        return {}
+
+def scan_macos_apps():
+    """Scans standard macOS application directories."""
+    apps = []
+    paths = ['/Applications', os.path.expanduser('~/Applications')]
+    for path in paths:
+        if os.path.exists(path):
+            for item in os.listdir(path):
+                if item.endswith('.app'):
+                    app_name = item[:-4]
+                    apps.append(app_name)
+    return apps
+
+def scan_linux_apps():
+    apps = []
+    xdg_data_home = os.environ.get('XDG_DATA_HOME', os.path.expanduser('~/.local/share'))
+    
+    paths = [
+        '/usr/share/applications',
+        '/usr/local/share/applications',
+        os.path.join(xdg_data_home, 'applications')
+    ]
+    
+    for path in paths:
+        if os.path.exists(path):
+            for item in os.listdir(path):
+                if item.endswith('.desktop'):
+                    file_path = os.path.join(path, item)
+                    try:
+                        with open(file_path, 'r', encoding='utf-8') as f:
+                            for line in f:
+                                if line.startswith('Name='):
+                                    apps.append(line.strip().split('=', 1)[1])
+                                    break
+                    except Exception:
+                        apps.append(item[:-8])
+    return apps
+
+def find_cask_matches(installed_apps, cask_mapping, already_installed_casks):
+    matches = {}
+    for app in installed_apps:
+        app_lower = app.lower()
+        variations = [
+            app_lower,                                  
+            re.sub(r'[\s\-]', '', app_lower),           
+            app_lower.replace(' ', '-'),                
+        ]
         
-        if "artifacts" in cask:
-            for artifact in cask["artifacts"]:
-                if isinstance(artifact, dict) and "app" in artifact:
-                    app_data = artifact["app"]
-                    items_to_process = app_data if isinstance(app_data, list) else [app_data]
-                    
-                    for item in items_to_process:
-                        target_str = ""
-                        if isinstance(item, dict):
-                            target_str = item.get("target") or list(item.values())[0]
-                        elif isinstance(item, str):
-                            target_str: str = item
-                            
-                        if isinstance(target_str, str):
-                            app_name_lower: str = Path(target_str).stem.lower()
-                            if app_name_lower == token_lower:
-                                brew_lookup[app_name_lower] = token
-    
-    print("[+] --- Match Results ---")
-    for local_lower, local_display in sorted(local_apps.items()):
-        if local_lower in brew_lookup:
-            print(f" -> '{local_display}' can be managed via: brew install --cask --force {brew_lookup[local_lower]}")
-    
-    print("[!]: Always double-check brew casks if they actually match the original app (script may get confused with generic names)\n[!]: Some results may not appear if they are only available as a different release (e.g osu@tachyon)")
+        no_version = re.sub(r'\s+\d+$', '', app_lower)
+        if no_version != app_lower:
+            variations.extend([
+                no_version,
+                re.sub(r'[\s\-]', '', no_version),
+                no_version.replace(' ', '-')
+            ])
+
+        for var in variations:
+            if var in cask_mapping:
+                matched_cask = cask_mapping[var]
+                if matched_cask not in already_installed_casks:
+                    matches[app] = matched_cask
+                break
+                
+    return matches
+
+def main():
+    system = platform.system()
+    if system not in ('Darwin', 'Linux'):
+        print(f"Unsupported OS: {system}. This script supports macOS and Linux.")
+        return
+
+    print("Checking for already installed Homebrew casks...")
+    installed_casks = get_installed_casks()
+    if installed_casks:
+        print(f"Found {len(installed_casks)} casks already managed by Homebrew.")
+
+    print("Fetching the latest Homebrew cask list... (this may take a few seconds)")
+    casks = fetch_brew_casks()
+    if not casks:
+        print("Failed to fetch cask data. Exiting.")
+        return
+
+    print(f"Scanning installed applications on {system}...")
+    if system == 'Darwin':
+        installed_apps = scan_macos_apps()
+    else:
+        installed_apps = scan_linux_apps()
+
+    installed_apps = list(set(installed_apps))
+
+    print("Matching applications to Homebrew casks...")
+    matches = find_cask_matches(installed_apps, casks, installed_casks)
+
+    if matches:
+        print(f"\nFound {len(matches)} apps that can be replaced with Homebrew Casks:")
+        print("-" * 65)
+        for app, cask in sorted(matches.items()):
+            print(f"{app.ljust(35)} -> brew install --cask {cask}")
+        print("-" * 65)
+    else:
+        print("\nAll of your installed apps are either already managed by Homebrew, or no matching casks were found.")
 
 if __name__ == "__main__":
     main()
