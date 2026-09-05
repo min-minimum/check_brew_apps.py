@@ -19,7 +19,7 @@ python3 check_brew_apps.py
 
 *  Always double-check outputted brew casks if they actually match the original app (script may get confused with generic names)
 
-* Some results may not appear if they are only available as a different release (e.g osu@tachyon)
+* Some results may appear only as a different release (e.g obs@beta is shown over obs)
 
 * Scans only the system applications folder for MacOS
 
