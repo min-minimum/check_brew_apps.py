@@ -1,5 +1,5 @@
 # check_brew_apps.py
-Simple python script that checks your applications folder for any apps that can be replaced with a brew cask.
+Simple python script that checks your applications folder for any apps that can be replaced with a Homebrew cask.
 
 ## Installation & Setup
 Clone this repository:
